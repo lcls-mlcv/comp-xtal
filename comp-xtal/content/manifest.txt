@@ -11,3 +11,4 @@
 11-advanced-event-code.md
 12-appendix-programs.md
 13-debugging-tips.md
+14-running-abismal.md

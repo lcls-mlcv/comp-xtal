@@ -16,7 +16,10 @@ MANIFEST = CONTENT / "manifest.txt"
 OUT_HTML = ROOT / "index.html"
 PDF = ROOT.parent / "material" / "comp-xtal_stable_handbook.pdf"
 
-# Same anchors as the original PDF split (import only)
+# PDF-import only: anchors used by `import-pdf` / `import-pdf-images` to split the
+# original PDF. The `build` command does NOT read this — it derives sections from the
+# manifest and per-file frontmatter, so hand-authored chapters need only a content file
+# (listed in content/manifest.txt) and an entry in PART_GROUPS below.
 SECTIONS: list[tuple[str, str, str | None]] = [
     ("intro", "About this handbook", None),
     ("references", "Helpful references", "Helpful references"),
@@ -100,6 +103,7 @@ PART_GROUPS: list[tuple[str, str, list[str]]] = [
     ("advanced", "Advanced", ["advanced-event-code"]),
     ("appendix", "Appendix", ["appendix-programs"]),
     ("debugging", "Debugging Tips", ["debugging-tips"]),
+    ("abismal", "Merging with ABISMAL", ["running-abismal"]),
 ]
 
 IMAGES_DIR = ROOT / "images"
@@ -521,10 +525,23 @@ def md_to_html_fragment(source: str) -> str:
     )
 
 
-def _validate_part_groups() -> None:
+def _validate_part_groups(section_ids: set[str]) -> None:
+    """Cross-check PART_GROUPS against the section ids found in the manifest."""
     listed = [sid for _ps, _pt, ids in PART_GROUPS for sid in ids]
-    if len(listed) != len(ORDERED_SLUGS) or set(listed) != set(ORDERED_SLUGS):
-        raise SystemExit("PART_GROUPS must list each section id exactly once.")
+    dupes = sorted({sid for sid in listed if listed.count(sid) > 1})
+    if dupes:
+        raise SystemExit(f"PART_GROUPS lists section id(s) more than once: {dupes}")
+    listed_set = set(listed)
+    missing_from_parts = sorted(section_ids - listed_set)
+    if missing_from_parts:
+        raise SystemExit(
+            f"Manifest sections not placed in PART_GROUPS: {missing_from_parts}"
+        )
+    orphan_parts = sorted(listed_set - section_ids)
+    if orphan_parts:
+        raise SystemExit(
+            f"PART_GROUPS references sections with no manifest file: {orphan_parts}"
+        )
 
 
 # When a part has multiple chapters and already shows a part heading, drop this prefix from H2/TOC.
@@ -554,7 +571,6 @@ def _article_html(sid: str, display_title: str, data_title: str, body_html: str)
 
 
 def cmd_build() -> None:
-    _validate_part_groups()
     paths = load_manifest_files()
     by_id: dict[str, tuple[str, str]] = {}
     for path in paths:
@@ -569,12 +585,12 @@ def cmd_build() -> None:
             title = SLUG_TO_TITLE[sid]
         if not sid or not title:
             raise SystemExit(f"{path}: frontmatter must include id and title (or use known slug in filename).")
+        if sid in by_id:
+            raise SystemExit(f"{path}: duplicate section id {sid!r} in manifest.")
         body_html = md_to_html_fragment(body.strip())
         by_id[sid] = (title, body_html)
 
-    missing = set(ORDERED_SLUGS) - set(by_id)
-    if missing:
-        raise SystemExit(f"Manifest missing sections expected by PART_GROUPS: {sorted(missing)}")
+    _validate_part_groups(set(by_id))
 
     nav_parts: list[str] = []
     for part_slug, part_label, sids in PART_GROUPS:
